@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "51839895505",
+    "project_id": "gf-alarm-api",
+    "storage_bucket": "gf-alarm-api.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:51839895505:android:788917a8c7d1e9a79b82f0",
+        "android_client_info": {
+          "package_name": "com.example.gf_alarm_api"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDKjDNu3KGZVoMGG-4n5Yf8tS9lJBO5Km4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
