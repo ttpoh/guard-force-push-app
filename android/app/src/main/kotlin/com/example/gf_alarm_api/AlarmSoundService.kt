@@ -18,7 +18,7 @@ class AlarmSoundService : Service() {
 
         private const val NOTI_ID = 88001
         const val ACTION_STOP = "STOP"
-        private const val CHANNEL_ID = "alarm_channel_v3"
+        private const val CHANNEL_ID = "alarm_channel_v4"
 
         // 기본 자동 종료(ms) — 인텐트로 덮어쓸 수 있음(EXTRA_AUTO_STOP_MS)
         private const val DEFAULT_AUTO_STOP_MS = 60_000L

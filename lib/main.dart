@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math'; // ★ 추가: UUID용
 
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -8,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart'; // ★ 추가: Keychain/Keystore
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,11 +17,60 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import 'firebase_options.dart';
 
+/// ─────────────────────────────────────────────────────────────────
+/// ★ 공통 DeviceId 헬퍼 (Android: SSAID, iOS: Keychain UUID)
+/// ─────────────────────────────────────────────────────────────────
+class DeviceId {
+  static const _ch = MethodChannel('app.device.id'); // Android-side channel
+  static const _storage = FlutterSecureStorage();    // iOS=Keychain, Android=Keystore
+
+  static Future<String> get() async {
+    if (Platform.isAndroid) {
+      final ssaid = await _ch.invokeMethod<String>('getAndroidId');
+      if (ssaid != null && ssaid.isNotEmpty) return ssaid;
+      return _fallbackUuid(); // 드문 케이스 방어
+    } else if (Platform.isIOS) {
+      final existing = await _storage.read(key: 'device_uuid');
+      if (existing != null && existing.isNotEmpty) return existing;
+
+      final newId = _randomUuidV4();
+      await _storage.write(
+        key: 'device_uuid',
+        value: newId,
+        iOptions: const IOSOptions(
+          accessibility: KeychainAccessibility.unlocked,
+        ),
+      );
+      return newId;
+    } else {
+      return _fallbackUuid();
+    }
+  }
+
+  static Future<String> _fallbackUuid() async {
+    final existing = await _storage.read(key: 'fallback_uuid');
+    if (existing != null && existing.isNotEmpty) return existing;
+    final id = _randomUuidV4();
+    await _storage.write(key: 'fallback_uuid', value: id);
+    return id;
+  }
+
+  static String _randomUuidV4() {
+    final rnd = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant
+    String h(int n) => n.toRadixString(16).padLeft(2, '0');
+    final b = bytes.map(h).join();
+    return '${b.substring(0,8)}-${b.substring(8,12)}-${b.substring(12,16)}-${b.substring(16,20)}-${b.substring(20)}';
+  }
+}
+
 // ------------------------------
 // 채널 정의
 // ------------------------------
 const AndroidNotificationChannel criticalChannel = AndroidNotificationChannel(
-  'alarm_channel_v3',
+  'alarm_channel_v4',
   'Critical Alerts',
   description: '무음/방해금지에도 울릴 수 있는 긴급 알림',
   importance: Importance.max,
@@ -408,6 +459,7 @@ class _WebViewPageState extends State<WebViewPage> {
     }
   }
 
+  // ★ 수정: device_id/OS/FCM 토큰을 쿠키 & localStorage에 반영
   Future<void> _setPushTokenCookies(String token) async {
     await _cookieManager.setCookie(const WebViewCookie(
       name: 'cookie_placeholder',
@@ -415,12 +467,16 @@ class _WebViewPageState extends State<WebViewPage> {
       domain: kBaseHost,
       path: '/',
     ));
+
+    // FCM token
     await _cookieManager.setCookie(WebViewCookie(
       name: 'push_token',
       value: token,
       domain: kBaseHost,
       path: '/',
     ));
+
+    // OS
     final os = Platform.isIOS ? 'ios' : (Platform.isAndroid ? 'android' : 'web');
     await _cookieManager.setCookie(WebViewCookie(
       name: 'os',
@@ -428,16 +484,39 @@ class _WebViewPageState extends State<WebViewPage> {
       domain: kBaseHost,
       path: '/',
     ));
+
+    // Device ID
+    try {
+      final deviceId = await DeviceId.get();
+      await _cookieManager.setCookie(WebViewCookie(
+        name: 'device_id',
+        value: deviceId,
+        domain: kBaseHost,
+        path: '/',
+      ));
+      debugPrint('COOKIE SET: device_id=$deviceId'); // ★ 추가
+
+      await _controller.runJavaScript(
+        'try{window.localStorage.setItem("device_id","$deviceId");}catch(e){}',
+      );
+    } catch (_) {}
+
+    // localStorage fcm_token
     await _controller.runJavaScript(
-        'window.localStorage.setItem("fcm_token", "$token");');
+      'window.localStorage.setItem("fcm_token", "$token");',
+    );
   }
 
+  // ★ 수정: sync 호출 시 X-Device-Id 헤더 포함
   Future<void> _callSyncInPage() async {
     try {
       await _controller.runJavaScript('''
         fetch("/api/fcm/sync", {
           method: "POST",
-          headers: { "X-FCM-Token": window.localStorage.getItem("fcm_token") },
+          headers: {
+            "X-FCM-Token": window.localStorage.getItem("fcm_token"),
+            "X-Device-Id": window.localStorage.getItem("device_id")
+          },
           credentials: "include"
         }).then(res => res.text());
       ''');
@@ -446,10 +525,27 @@ class _WebViewPageState extends State<WebViewPage> {
     }
   }
 
+  // ★ 수정: 페이지 로드 전에 device_id를 먼저 주입(쿠키+localStorage)
   Future<void> _injectTokenAndLoad() async {
     try {
+      try {
+        final deviceId = await DeviceId.get();
+        await _cookieManager.setCookie(WebViewCookie(
+          name: 'device_id',
+          value: deviceId,
+          domain: kBaseHost,
+          path: '/',
+        ));
+        await _controller.runJavaScript(
+          'try{window.localStorage.setItem("device_id","$deviceId");}catch(e){}',
+        );
+      } catch (_) {}
+
       final fcmToken = await FirebaseMessaging.instance.getToken();
+      debugPrint('FCM TOKEN(getToken): $fcmToken'); // ★ 추가
+
       if (fcmToken != null) await _setPushTokenCookies(fcmToken);
+
       await _controller.loadRequest(kLoginUri);
     } catch (e) {
       debugPrint('load error: $e');
@@ -540,16 +636,6 @@ class _WebViewPageState extends State<WebViewPage> {
                 ),
               ),
               const Divider(height: 1),
-              // ListTile(
-              //   leading: const Icon(Icons.notifications_active_outlined),
-              //   title: const Text('채널 설정 (긴급)'),
-              //   onTap: () => _openChannelSettings(criticalChannel.id),
-              // ),
-              // ListTile(
-              //   leading: const Icon(Icons.notifications_none),
-              //   title: const Text('채널 설정 (일반)'),
-              //   onTap: () => _openChannelSettings(normalChannel.id),
-              // ),
               ListTile(
                 leading: const Icon(Icons.app_settings_alt),
                 title: const Text('앱 알림 설정'),

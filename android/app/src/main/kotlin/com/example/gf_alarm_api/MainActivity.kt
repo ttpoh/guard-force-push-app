@@ -10,6 +10,8 @@ import android.provider.Settings
 
 class MainActivity: FlutterActivity() {
     private val chName = "gf_alarm_channel"
+    private val deviceIdChannel = "app.device.id" // ★ 추가: SSAID 채널명
+
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -29,6 +31,18 @@ class MainActivity: FlutterActivity() {
                         }
                         startService(svc)
                         result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+            
+        // ★ 추가: 디바이스 식별자(SSAAD) 채널
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, deviceIdChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getAndroidId" -> {
+                        val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                        result.success(id)
                     }
                     else -> result.notImplemented()
                 }

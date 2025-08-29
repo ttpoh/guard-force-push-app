@@ -41,6 +41,8 @@ dependencies:
   android_intent_plus: ^5.0.2
   package_info_plus: ^8.0.0
   shared_preferences: ^2.2.3
+  flutter_secure_storage: ^9.2.2   # (최신 대략)
+
 
 dev_dependencies:
   flutter_test:

@@ -18,7 +18,7 @@ class BackgroundReceiver : FirebaseMessagingService() {
 
     companion object {
         private const val TAG = "BackgroundReceiver"
-        private const val CH_CRITICAL = "alarm_channel_v3"
+        private const val CH_CRITICAL = "alarm_channel_v4"
         private const val CH_NORMAL   = "normal_channel_v1"
 
         // Flutter SharedPreferences 파일/키 규칙
@@ -167,6 +167,7 @@ class BackgroundReceiver : FirebaseMessagingService() {
     private fun ensureChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
 
         // 긴급(알람) 채널
         if (nm.getNotificationChannel(CH_CRITICAL) == null) {
