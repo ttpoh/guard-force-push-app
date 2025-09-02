@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Handler
 import android.os.IBinder
 import android.util.Log
@@ -38,6 +39,7 @@ class AlarmSoundService : Service() {
     }
 
     private var player: MediaPlayer? = null
+    private var loudness: LoudnessEnhancer? = null
     private val handler by lazy { Handler(mainLooper) }
     private var autoStopRunnable: Runnable? = null
 
@@ -154,21 +156,45 @@ class AlarmSoundService : Service() {
 
             // 재생할 raw 리소스 선택 (없으면 기본 critical_alert)
             val resId = resolveRawResId(soundResName) ?: R.raw.critical_alert
+            val afd = resources.openRawResourceFd(resId)
+                ?: throw IllegalStateException("openRawResourceFd returned null")
 
-            player = MediaPlayer.create(this, resId).apply {
+            // ★★ 중요: prepare 이전에 AudioAttributes 설정하고 직접 dataSource/prepare
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM) // 알람 스트림 매핑
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
+            player = MediaPlayer().apply {
+                setAudioAttributes(attrs) // prepare 전에
+                setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                 isLooping = loop
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                setVolume(gain, gain) // 스케일 볼륨 (0.0~1.0)
+                prepare() // 여기서 스트림/라우팅 확정
+                setVolume(gain, gain) // 0.0~1.0 (원본이 작으면 1.0도 작음)
                 if (!loop) {
-                    setOnCompletionListener { stopSelfSafely() } // 1회 재생이면 끝나면 자동 종료
+                    setOnCompletionListener { stopSelfSafely() }
                 }
                 start()
             }
+            afd.close()
+
+            // (옵션) 추가 증폭: LoudnessEnhancer (기기 지원 & 콘텐츠 따라 체감 다름)
+            try {
+                loudness = LoudnessEnhancer(player!!.audioSessionId).apply {
+                    setTargetGain(1500) // +15 dB 정도 (1000=+10 dB)
+                    enabled = true
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "LoudnessEnhancer not available", e)
+            }
+
+            // (옵션) 일부 OEM에서 MUSIC로만 크게 들리는 현상 대응 → 필요 시 해제/조정
+            // try {
+            //     val am = getSystemService(AUDIO_SERVICE) as AudioManager
+            //     val maxM = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            //     am.setStreamVolume(AudioManager.STREAM_MUSIC, maxM, 0)
+            // } catch (_: Throwable) {}
+
         } catch (t: Throwable) {
             Log.e(TAG, "startPlayer error", t)
             stopSelfSafely()
@@ -183,6 +209,12 @@ class AlarmSoundService : Service() {
 
     private fun stopSelfSafely() {
         try {
+            loudness?.let {
+                try { it.enabled = false } catch (_: Throwable) {}
+                try { it.release() } catch (_: Throwable) {}
+            }
+            loudness = null
+
             player?.setOnCompletionListener(null)
             player?.stop()
             player?.release()
